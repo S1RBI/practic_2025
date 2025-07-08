@@ -1,0 +1,59 @@
+<resources>
+    <string name="app_name">NetPing Monitor</string>
+
+    <!-- Connection -->
+    <string name="device_address">IP адрес устройства</string>
+    <string name="username">Логин</string>
+    <string name="password">Пароль</string>
+    <string name="connect">Подключиться</string>
+    <string name="disconnect">Отключиться</string>
+    <string name="refresh">Обновить</string>
+    <string name="connected">Подключено</string>
+    <string name="disconnected">Не подключено</string>
+
+    <!-- Device info -->
+    <string name="device_info">Информация об устройстве</string>
+    <string name="model">Модель</string>
+    <string name="firmware">Версия ПО</string>
+    <string name="serial_number">Серийный номер</string>
+    <string name="uptime">Время работы</string>
+
+    <!-- Power outlets -->
+    <string name="power_outlets">Розетки питания</string>
+    <string name="outlet">Розетка</string>
+    <string name="on">ВКЛ</string>
+    <string name="off">ВЫКЛ</string>
+    <string name="voltage">Напряжение</string>
+    <string name="current">Ток</string>
+    <string name="power">Мощность</string>
+
+    <!-- Sensors -->
+    <string name="sensors">Датчики</string>
+    <string name="temperature">Температура</string>
+    <string name="humidity">Влажность</string>
+
+    <!-- Network -->
+    <string name="network_interfaces">Сетевые интерфейсы</string>
+    <string name="ip_address">IP адрес</string>
+    <string name="mac_address">MAC адрес</string>
+    <string name="status">Статус</string>
+    <string name="active">Активен</string>
+    <string name="inactive">Неактивен</string>
+
+    <!-- System -->
+    <string name="system_status">Состояние системы</string>
+    <string name="cpu_temperature">Температура CPU</string>
+    <string name="cpu_load">Загрузка CPU</string>
+    <string name="memory_usage">Использование памяти</string>
+    <string name="disk_free">Свободное место</string>
+
+    <!-- Errors -->
+    <string name="error_connection">Ошибка подключения</string>
+    <string name="error_auth">Ошибка авторизации</string>
+    <string name="error_data">Ошибка получения данных</string>
+    <string name="error_unknown">Неизвестная ошибка</string>
+
+    <!-- Loading -->
+    <string name="loading">Загрузка...</string>
+    <string name="loading_data">Загрузка данных...</string>
+</resources>
