@@ -26,6 +26,9 @@ import javax.inject.Singleton
     private const val SETTER_ENDPOINT = "/setter_get.cgi"
     private const val SETTER_SET_ENDPOINT = "/setter_set.cgi"
     private const val SETTER_TEST_ENDPOINT = "/setter_test.cgi"
+    private const val RELAY_ENDPOINT = "/relay_get.cgi"
+    private const val RELAY_SET_ENDPOINT = "/relay_set.cgi"
+    private const val RELAY_RESET_ENDPOINT = "/relay_reset.cgi"
 }
 
     private var currentDeviceUrl: String? = null
@@ -57,7 +60,10 @@ import javax.inject.Singleton
             val deviceInfoData = fetchDeviceInfo()
             val setupData = fetchSetupData()
             val logicRules = fetchLogicRules()
-            val (tstatData, termoNChannels, rhNChannels) = fetchTstatData()
+            val tstatDataTriple = fetchTstatData()
+            val tstatData = tstatDataTriple.first
+            val termoNChannels = tstatDataTriple.second
+            val rhNChannels = tstatDataTriple.third
             currentTstatData = tstatData
 
             val uptimeFromSetup = fetchUptimeFromSetup()
@@ -70,6 +76,10 @@ import javax.inject.Singleton
             val sensorStatus = fetchLogicStatus()
             val completeLogicStatus = sensorStatus.copy(isLogicRunning = cachedLogicRunning)
 
+            val relayDataPair = fetchRelayDataSync()
+            val relayData = relayDataPair.first
+            val relayStatus = relayDataPair.second
+
             NetPingDeviceData(
                 deviceInfo = completeDeviceInfo,
                 networkInterfaces = setupData.networkInterfaces,
@@ -80,7 +90,9 @@ import javax.inject.Singleton
                 setterData = fetchSetterData(),
                 logicStatus = completeLogicStatus,
                 termoNChannels = termoNChannels,
-                rhNChannels = rhNChannels
+                rhNChannels = rhNChannels,
+                relayData = relayData,
+                relayStatus = relayStatus
             )
         } catch (e: Exception) {
             throw Exception("Ошибка получения данных: ${e.message}")
@@ -269,9 +281,9 @@ import javax.inject.Singleton
                         val responseBody = formResponse.body?.string() ?: ""
                         if (!responseBody.contains("error", ignoreCase = true)) {
                             delay(1500)
-                            val currentTstatData = fetchTstatData()
+                            val currentTstatDataTriple = fetchTstatData()
                             val hasExpectedData = validTstatData.any { expected ->
-                                currentTstatData.first.any { current ->
+                                currentTstatDataTriple.first.any { current ->
                                     expected.sensorNo == current.sensorNo &&
                                             expected.setpoint == current.setpoint &&
                                             expected.hyst == current.hyst
@@ -296,9 +308,9 @@ import javax.inject.Singleton
                     if (e.message?.contains("unexpected end of stream") == true) {
                         delay(1500)
                         try {
-                            val currentTstatData = fetchTstatData()
+                            val currentTstatDataTriple = fetchTstatData()
                             val hasExpectedData = validTstatData.any { expected ->
-                                currentTstatData.first.any { current ->
+                                currentTstatDataTriple.first.any { current ->
                                     expected.sensorNo == current.sensorNo &&
                                             expected.setpoint == current.setpoint &&
                                             expected.hyst == current.hyst
@@ -327,9 +339,9 @@ import javax.inject.Singleton
                     if (responseBody.contains("<html", ignoreCase = true) || responseBody.contains("<!DOCTYPE", ignoreCase = true)) {
                         delay(1500)
                         try {
-                            val currentTstatData = fetchTstatData()
+                            val currentTstatDataTriple = fetchTstatData()
                             val hasExpectedData = validTstatData.any { expected ->
-                                currentTstatData.first.any { current ->
+                                currentTstatDataTriple.first.any { current ->
                                     expected.sensorNo == current.sensorNo &&
                                             expected.setpoint == current.setpoint &&
                                             expected.hyst == current.hyst
@@ -585,6 +597,186 @@ import javax.inject.Singleton
             }
         }
 
+    suspend fun saveRelayData(relayData: List<RelayData>): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            try {
+                requireConnection()
+
+                val validRelayData = relayData.take(4) // Максимум 4 реле
+                println("NetPingRepository.saveRelayData: Сохранение данных для ${validRelayData.size} реле")
+                validRelayData.forEachIndexed { index, relay ->
+                    println("NetPingRepository.saveRelayData: Реле ${index + 1}: name='${relay.name}', mode=${relay.mode}, resetTime=${relay.resetTime}")
+                }
+
+                val binaryPayload = buildRelayPayload(validRelayData)
+                val hexString = binaryPayload.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
+                println("NetPingRepository.saveRelayData: Отправляемый HEX (${hexString.length} символов):")
+                println("NetPingRepository.saveRelayData: $hexString")
+
+                // Разбиваем hex на блоки для удобства чтения
+                val formattedHex = hexString.chunked(32).joinToString("\n") { chunk ->
+                    chunk.chunked(2).joinToString(" ")
+                }
+                println("NetPingRepository.saveRelayData: Форматированный HEX:\n$formattedHex")
+
+                // Пробуем form-data отправку
+                try {
+                    println("NetPingRepository.saveRelayData: Попытка отправки через form-data")
+                    val formData = FormBody.Builder().add("data", hexString).build()
+                    val formResponse = okHttpClient.newCall(createPostRequest(RELAY_SET_ENDPOINT, formData)).execute()
+
+                    println("NetPingRepository.saveRelayData: Form-data ответ: ${formResponse.code}")
+                    if (formResponse.isSuccessful) {
+                        val responseBody = formResponse.body?.string() ?: ""
+                        println("NetPingRepository.saveRelayData: Form-data response body: ${responseBody.take(200)}")
+                        if (!responseBody.contains("error", ignoreCase = true)) {
+                            println("NetPingRepository.saveRelayData: Form-data успешна, проверяем сохранение...")
+                            delay(1500)
+                            val currentRelayDataPair = fetchRelayData()
+                            val hasExpectedData = validRelayData.any { expected ->
+                                currentRelayDataPair.first.any { current ->
+                                    expected.name.equals(current.name, ignoreCase = true) &&
+                                            expected.mode == current.mode
+                                }
+                            }
+                            if (hasExpectedData) {
+                                println("NetPingRepository.saveRelayData: ✅ Данные реле успешно сохранены через form-data")
+                                return@withContext Result.success(true)
+                            } else {
+                                println("NetPingRepository.saveRelayData: ⚠️ Form-data отправлена, но данные не изменились")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    println("NetPingRepository.saveRelayData: Form-data ошибка: ${e.message}")
+                    // Fallback к бинарной отправке
+                }
+
+                println("NetPingRepository.saveRelayData: Попытка отправки через binary payload")
+                val mediaType = "application/octet-stream".toMediaType()
+                val requestBody = binaryPayload.toRequestBody(mediaType)
+                val request = createBinaryPostRequest(RELAY_SET_ENDPOINT, requestBody)
+
+                val response = try {
+                    okHttpClient.newCall(request).execute()
+                } catch (e: java.io.IOException) {
+                    println("NetPingRepository.saveRelayData: Binary IOException: ${e.message}")
+                    if (e.message?.contains("unexpected end of stream") == true) {
+                        println("NetPingRepository.saveRelayData: Unexpected end of stream - проверяем результат...")
+                        delay(1500)
+                        try {
+                            val currentRelayDataPair = fetchRelayData()
+                            val hasExpectedData = validRelayData.any { expected ->
+                                currentRelayDataPair.first.any { current ->
+                                    expected.name.equals(current.name, ignoreCase = true) &&
+                                            expected.mode == current.mode
+                                }
+                            }
+                            if (hasExpectedData) {
+                                println("NetPingRepository.saveRelayData: ✅ Данные реле сохранены (несмотря на IOException)")
+                                return@withContext Result.success(true)
+                            } else {
+                                println("NetPingRepository.saveRelayData: ❌ Данные реле не сохранились")
+                                return@withContext Result.failure(Exception("Данные реле не были сохранены на устройстве"))
+                            }
+                        } catch (ex: Exception) {
+                            println("NetPingRepository.saveRelayData: Ошибка при проверке: ${ex.message}")
+                            return@withContext Result.success(true)
+                        }
+                    } else {
+                        throw e
+                    }
+                }
+
+                println("NetPingRepository.saveRelayData: Binary ответ: ${response.code}")
+                val responseBody = try {
+                    response.body?.string() ?: ""
+                } catch (e: Exception) {
+                    println("NetPingRepository.saveRelayData: Ошибка чтения response body: ${e.message}")
+                    ""
+                }
+
+                if (response.isSuccessful) {
+                    println("NetPingRepository.saveRelayData: Binary response body: ${responseBody.take(200)}")
+                    if (responseBody.contains("<html", ignoreCase = true) || responseBody.contains("<!DOCTYPE", ignoreCase = true)) {
+                        println("NetPingRepository.saveRelayData: HTML ответ получен, проверяем сохранение...")
+                        delay(1500)
+                        try {
+                            val currentRelayDataPair = fetchRelayData()
+                            val hasExpectedData = validRelayData.any { expected ->
+                                currentRelayDataPair.first.any { current ->
+                                    expected.name.equals(current.name, ignoreCase = true) &&
+                                            expected.mode == current.mode
+                                }
+                            }
+
+                            if (hasExpectedData) {
+                                println("NetPingRepository.saveRelayData: ✅ Данные реле успешно сохранены")
+                                Result.success(true)
+                            } else {
+                                println("NetPingRepository.saveRelayData: ❌ Данные реле не сохранились на устройстве")
+                                Result.failure(Exception("Изменения не были применены на устройстве"))
+                            }
+                        } catch (ex: Exception) {
+                            println("NetPingRepository.saveRelayData: Ошибка при финальной проверке: ${ex.message}")
+                            Result.success(true)
+                        }
+                    } else {
+                        println("NetPingRepository.saveRelayData: ✅ Успешный ответ от устройства")
+                        Result.success(true)
+                    }
+                } else {
+                    println("NetPingRepository.saveRelayData: ❌ HTTP ошибка: ${response.code}")
+                    Result.failure(Exception("Ошибка HTTP ${response.code}: $responseBody"))
+                }
+            } catch (e: Exception) {
+                println("NetPingRepository.saveRelayData: ❌ Исключение: ${e.message}")
+                e.printStackTrace()
+                Result.failure(e)
+            }
+        }
+
+    suspend fun controlRelay(relayIndex: Int, action: RelayAction): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            try {
+                requireConnection()
+
+                val actionValue = when (action) {
+                    RelayAction.FORCE_OFF -> 0
+                    RelayAction.FORCE_ON -> 1
+                }
+
+                println("NetPingRepository.controlRelay: Управление реле ${relayIndex + 1}, действие: ${action.name} (значение: $actionValue)")
+
+                val binaryPayload = buildRelayResetPayload(relayIndex, actionValue)
+                val hexString = binaryPayload.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
+                println("NetPingRepository.controlRelay: Отправляемый HEX для управления реле: $hexString")
+                println("NetPingRepository.controlRelay: Payload details: relayIndex=$relayIndex, actionValue=$actionValue")
+
+                val formData = FormBody.Builder().add("data", hexString).build()
+                val request = createPostRequest(RELAY_RESET_ENDPOINT, formData)
+                val response = okHttpClient.newCall(request).execute()
+
+                println("NetPingRepository.controlRelay: Ответ сервера: ${response.code}")
+
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: ""
+                    println("NetPingRepository.controlRelay: Response body: ${responseBody.take(100)}")
+                    println("NetPingRepository.controlRelay: ✅ Команда управления реле выполнена успешно")
+                    Result.success(true)
+                } else {
+                    println("NetPingRepository.controlRelay: ❌ Ошибка выполнения команды: HTTP ${response.code}")
+                    Result.failure(Exception("Ошибка выполнения команды: HTTP ${response.code}"))
+                }
+            } catch (e: Exception) {
+                println("NetPingRepository.controlRelay: ❌ Исключение при управлении реле: ${e.message}")
+                e.printStackTrace()
+                Result.failure(e)
+            }
+        }
+
     private fun testConnection(): Boolean {
         return try {
             val request = createGetRequest(DEVNAME_ENDPOINT)
@@ -689,6 +881,8 @@ import javax.inject.Singleton
         }
     }
 
+
+
     private fun fetchLogicStatus(): LogicStatusData {
         try {
             val request = createGetRequest(LOGIC_STATUS_ENDPOINT)
@@ -762,6 +956,92 @@ import javax.inject.Singleton
             i += 2
         }
         return data
+    }
+
+    suspend fun fetchRelayData(): Pair<List<RelayData>, RelayStatusData> = withContext(Dispatchers.IO) {
+        try {
+            requireConnection()
+            println("NetPingRepository.fetchRelayData: Making request to $RELAY_ENDPOINT")
+            val request = createGetRequest(RELAY_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                println("NetPingRepository.fetchRelayData: Response code: ${response.code}")
+                println("NetPingRepository.fetchRelayData: Response body preview (first 500 chars):")
+                println(responseBody.take(500))
+                if (responseBody.length > 500) {
+                    println("NetPingRepository.fetchRelayData: ... (response truncated, total length: ${responseBody.length})")
+                }
+
+                val result = parseRelayResponse(responseBody)
+                println("NetPingRepository.fetchRelayData: Parse result: ${result.first.size} relays, ${result.second.relayStates.size} states")
+                result
+            } else {
+                println("NetPingRepository.fetchRelayData: HTTP error: ${response.code}")
+                Pair(emptyList(), RelayStatusData())
+            }
+        } catch (e: Exception) {
+            println("NetPingRepository.fetchRelayData: Exception: ${e.message}")
+            e.printStackTrace()
+            Pair(emptyList(), RelayStatusData())
+        }
+    }
+
+    private fun fetchRelayDataSync(): Pair<List<RelayData>, RelayStatusData> {
+        return try {
+            println("NetPingRepository.fetchRelayDataSync: Making request to $RELAY_ENDPOINT")
+            val request = createGetRequest(RELAY_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                println("NetPingRepository.fetchRelayDataSync: Response code: ${response.code}")
+                println("NetPingRepository.fetchRelayDataSync: Response body preview (first 500 chars):")
+                println(responseBody.take(500))
+                if (responseBody.length > 500) {
+                    println("NetPingRepository.fetchRelayDataSync: ... (response truncated, total length: ${responseBody.length})")
+                }
+
+                val result = parseRelayResponse(responseBody)
+                println("NetPingRepository.fetchRelayDataSync: Parse result: ${result.first.size} relays, ${result.second.relayStates.size} states")
+                result
+            } else {
+                println("NetPingRepository.fetchRelayDataSync: HTTP error: ${response.code}")
+                Pair(emptyList(), RelayStatusData())
+            }
+        } catch (e: Exception) {
+            println("NetPingRepository.fetchRelayDataSync: Exception: ${e.message}")
+            e.printStackTrace()
+            Pair(emptyList(), RelayStatusData())
+        }
+    }
+
+    private fun parseRelayResponse(responseBody: String): Pair<List<RelayData>, RelayStatusData> {
+        return NetPingParser.parseRelayResponse(responseBody)
+    }
+
+    private fun buildRelayPayload(relayData: List<RelayData>): ByteArray {
+        val generator = RelayPayloadGenerator()
+        val relayConfigs = relayData.map { relay ->
+            RelayConfig(
+                name = relay.name.ifBlank { "" },
+                mode = relay.mode,
+                resetTime = relay.resetTime
+            )
+        }
+        val configsToUse = relayConfigs.take(4)
+
+        val hexString = generator.generatePayload(configsToUse)
+        return hexStringToByteArray(hexString)
+    }
+
+    private fun buildRelayResetPayload(relayIndex: Int, actionValue: Int): ByteArray {
+        println("NetPingRepository.buildRelayResetPayload: relayIndex=$relayIndex, actionValue=$actionValue")
+        val payload = byteArrayOf(relayIndex.toByte(), actionValue.toByte())
+        println("NetPingRepository.buildRelayResetPayload: Создан payload: [${payload.joinToString(", ") { it.toString() }}]")
+        println("NetPingRepository.buildRelayResetPayload: Payload bytes: [0x${"%02x".format(payload[0])}, 0x${"%02x".format(payload[1])}]")
+        return payload
     }
 
     private fun parseDeviceInfoResponse(responseBody: String): DeviceInfo {
@@ -851,6 +1131,8 @@ import javax.inject.Singleton
         return NetPingParser.parseSetterResponse(responseBody)
     }
 
+
+
     private fun parseLogicResponse(responseBody: String): List<LogicRule> {
         val rules = NetPingParser.parseLogicResponse(responseBody)
 
@@ -904,6 +1186,8 @@ import javax.inject.Singleton
         return hexStringToByteArray(hexString)
     }
 
+
+
     private fun buildPingerPayload(pingerData: List<PingerData>): ByteArray {
         val generator = PingerPayloadGenerator()
         val pingerConfigs = pingerData.map { pinger ->
@@ -919,6 +1203,8 @@ import javax.inject.Singleton
         val hexString = generator.generatePayload(configsToUse)
         return hexStringToByteArray(hexString)
     }
+
+
 
     data class PingerConfig(
         val address: String,
@@ -941,6 +1227,12 @@ import javax.inject.Singleton
         val community: String,
         val valueOn: Int,
         val valueOff: Int
+    )
+
+    data class RelayConfig(
+        val name: String,
+        val mode: Int,
+        val resetTime: Int
     )
 
     class ThermostatPayloadGenerator {
@@ -1204,6 +1496,56 @@ import javax.inject.Singleton
         private fun writeIntLE(buffer: ByteArray, offset: Int, value: Int) {
             val bytes = java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(value).array()
             System.arraycopy(bytes, 0, buffer, offset, 4)
+        }
+    }
+
+    class RelayPayloadGenerator {
+        companion object {
+            private const val RELAY_BLOCK_SIZE = 64
+            private const val NAME_OFFSET = 0
+            private const val MODE_OFFSET = 32
+            private const val RESET_TIME_OFFSET = 35
+            private const val NAME_SIZE = 32
+        }
+
+        fun generatePayload(relays: List<RelayConfig>): String {
+            println("RelayPayloadGenerator.generatePayload: Генерация payload для ${relays.size} реле")
+
+            if (relays.isEmpty()) {
+                println("RelayPayloadGenerator.generatePayload: Нет данных реле, возвращаем нулевой payload")
+                return "0".repeat(RELAY_BLOCK_SIZE * 2)
+            }
+
+            // Определяем количество реле для генерации (максимум 4)
+            val relayCount = relays.size.coerceAtMost(4)
+            val totalPayloadSize = RELAY_BLOCK_SIZE * relayCount
+            val payloadBuffer = ByteArray(totalPayloadSize)
+
+
+
+            // Обрабатываем каждое реле
+            relays.take(relayCount).forEachIndexed { index, relay ->
+                val blockOffset = index * RELAY_BLOCK_SIZE
+
+
+                // Записываем имя (32 байта) - СНАЧАЛА ДЛИНА, ПОТОМ СТРОКА
+                val nameBytes = relay.name.toByteArray(Charsets.UTF_8)
+                val nameLen = nameBytes.size.coerceAtMost(NAME_SIZE - 1)
+
+                payloadBuffer[blockOffset + NAME_OFFSET] = nameLen.toByte()
+
+                // Записываем саму строку начиная с позиции 1 в блоке
+                System.arraycopy(nameBytes, 0, payloadBuffer, blockOffset + NAME_OFFSET + 1, nameLen)
+
+                // Записываем режим (1 байт)
+                payloadBuffer[blockOffset + MODE_OFFSET] = relay.mode.toByte()
+
+                // Записываем время сброса (1 байт)
+                payloadBuffer[blockOffset + RESET_TIME_OFFSET] = relay.resetTime.toByte()
+                }
+
+            val result = payloadBuffer.joinToString("") { "%02x".format(it) }
+            return result
         }
     }
 }

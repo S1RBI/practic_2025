@@ -55,7 +55,9 @@ data class NetPingDeviceData(
     val setterData: List<SetterData> = emptyList(),
     val logicStatus: LogicStatusData = LogicStatusData(),
     val termoNChannels: Int = 8, // Количество температурных каналов из termo_n_ch
-    val rhNChannels: Int = 0 // Количество датчиков влажности из rh_n_ch
+    val rhNChannels: Int = 0, // Количество датчиков влажности из rh_n_ch
+    val relayData: List<RelayData> = emptyList(), // Данные реле
+    val relayStatus: RelayStatusData = RelayStatusData() // Статус реле
 )
 
 // Информация об устройстве
@@ -458,6 +460,48 @@ enum class LogicAction {
     STOP,   // Остановить логику
     START,  // Запустить логику
     RESET   // Сброс логики
+}
+
+// Реле
+data class RelayData(
+    val id: Int,
+    val name: String,
+    val mode: Int,
+    val resetTime: Int = 15,
+    val relayState: Boolean = false
+) {
+    fun getModeDescription(): String = when (mode) {
+        0 -> "Ручное Выкл"
+        1 -> "Ручное Вкл"
+        2 -> "Сторож"
+        3 -> "Расписание"
+        4 -> "Расп+Сторож"
+        5 -> "Логика"
+        else -> "Неизвестный режим ($mode)"
+    }
+
+    companion object {
+        fun getModeOptions(): List<Pair<Int, String>> = listOf(
+            0 to "Ручное Выкл",
+            1 to "Ручное Вкл",
+            2 to "Сторож",
+            3 to "Расписание",
+            4 to "Расп+Сторож",
+            5 to "Логика"
+        )
+    }
+}
+
+// Статус реле
+data class RelayStatusData(
+    val relayStates: Map<Int, Boolean> = emptyMap(), // Состояния реле по индексам
+    val lastUpdate: Long = 0L
+)
+
+// Действия управления реле
+enum class RelayAction {
+    FORCE_ON,   // Кратковременное включение (15с)
+    FORCE_OFF   // Кратковременное отключение (15с)
 }
 
 // Вспомогательный класс для setup_get.cgi

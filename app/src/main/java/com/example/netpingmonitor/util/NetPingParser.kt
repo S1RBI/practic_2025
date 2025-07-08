@@ -183,6 +183,112 @@ internal object NetPingParser {
     }
 
     /**
+     * Парсит RELAY данные
+     */
+    fun parseRelayResponse(responseBody: String): Pair<List<RelayData>, RelayStatusData> {
+        return try {
+            println("NetPingParser.parseRelayResponse: Starting to parse relay response")
+            println("NetPingParser.parseRelayResponse: Response body length: ${responseBody.length}")
+
+            // Ищем data=[ ] формат (как в вашем примере)
+            val dataMatch = Regex("data=\\[([^]]+)\\]").find(responseBody)
+            val relayList = if (dataMatch != null) {
+                println("NetPingParser.parseRelayResponse: Found data array: ${dataMatch.groupValues[1]}")
+                val dataString = dataMatch.groupValues[1]
+                val objects = JS_OBJECT_REGEX.findAll(dataString)
+
+                val parsedRelays = objects.mapIndexed { index, match ->
+                    val objectString = match.groupValues[1]
+                    println("NetPingParser.parseRelayResponse: Parsing relay object $index: $objectString")
+                    val objectData = parseJavaScriptObject(objectString)
+                    println("NetPingParser.parseRelayResponse: Parsed object data: $objectData")
+
+                    RelayData(
+                        id = index + 1,
+                        name = objectData["name"] ?: "",
+                        mode = objectData["mode"]?.toIntOrNull() ?: 0,
+                        resetTime = objectData["reset_time"]?.toIntOrNull() ?: 15
+                    )
+                }.toList()
+
+                println("NetPingParser.parseRelayResponse: Parsed ${parsedRelays.size} relays: $parsedRelays")
+                parsedRelays
+            } else {
+                println("NetPingParser.parseRelayResponse: No data array found, checking for relay_data")
+
+                // Fallback: ищем relay_data=[ ] формат
+                val relayDataMatch = Regex("relay_data=\\[([^]]+)\\]").find(responseBody)
+                if (relayDataMatch != null) {
+                    println("NetPingParser.parseRelayResponse: Found relay_data array: ${relayDataMatch.groupValues[1]}")
+                    val dataString = relayDataMatch.groupValues[1]
+                    val objects = JS_OBJECT_REGEX.findAll(dataString)
+
+                    objects.mapIndexed { index, match ->
+                        val objectString = match.groupValues[1]
+                        val objectData = parseJavaScriptObject(objectString)
+
+                        RelayData(
+                            id = index + 1,
+                            name = objectData["name"] ?: "",
+                            mode = objectData["mode"]?.toIntOrNull() ?: 0,
+                            resetTime = objectData["reset_time"]?.toIntOrNull() ?: 15
+                        )
+                    }.toList()
+                } else {
+                    println("NetPingParser.parseRelayResponse: No relay data found, returning empty list")
+                    emptyList()
+                }
+            }
+
+            // Parse relay status from relay_state fields within data objects
+            val stateMap = mutableMapOf<Int, Boolean>()
+
+            // Сначала пробуем извлечь статусы из relay_state полей в data объектах
+            val dataArrayMatch = Regex("data=\\[([^]]+)\\]").find(responseBody)
+            if (dataArrayMatch != null) {
+                val dataString = dataArrayMatch.groupValues[1]
+                val objects = JS_OBJECT_REGEX.findAll(dataString)
+
+                objects.forEachIndexed { index, match ->
+                    val objectString = match.groupValues[1]
+                    val objectData = parseJavaScriptObject(objectString)
+                    val relayState = objectData["relay_state"]?.toIntOrNull() ?: 0
+                    stateMap[index] = relayState == 1
+                    println("NetPingParser.parseRelayResponse: Relay $index state: $relayState (${stateMap[index]})")
+                }
+            }
+
+            // Fallback: ищем отдельный relay_status массив
+            if (stateMap.isEmpty()) {
+                val statusMatch = Regex("relay_status=\\[([^]]+)\\]").find(responseBody)
+                if (statusMatch != null) {
+                    println("NetPingParser.parseRelayResponse: Found relay_status array: ${statusMatch.groupValues[1]}")
+                    val statusArray = statusMatch.groupValues[1]
+                    val statusValues = statusArray.split(",")
+
+                    statusValues.forEachIndexed { index, statusStr ->
+                        val status = statusStr.trim().toIntOrNull() ?: 0
+                        stateMap[index] = status == 1
+                        println("NetPingParser.parseRelayResponse: Relay $index status from array: $status")
+                    }
+                }
+            }
+
+            val relayStatus = RelayStatusData(
+                relayStates = stateMap,
+                lastUpdate = System.currentTimeMillis()
+            )
+
+            println("NetPingParser.parseRelayResponse: Final result - ${relayList.size} relays, status map: ${stateMap}")
+            Pair(relayList, relayStatus)
+        } catch (e: Exception) {
+            println("NetPingParser.parseRelayResponse: Exception occurred: ${e.message}")
+            e.printStackTrace()
+            Pair(emptyList(), RelayStatusData())
+        }
+    }
+
+    /**
      * Парсит логические правила и извлекает data_logic_flags
      */
     fun parseLogicResponse(responseBody: String): List<LogicRule> {

@@ -219,6 +219,33 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         }
     }
 
+    private suspend fun updateRelayDataFromDevice() {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+
+        try {
+            // Получаем только данные реле с устройства
+            val relayDataPair = netPingRepository.fetchRelayData()
+            val relayData = relayDataPair.first
+            val relayStatus = relayDataPair.second
+
+            if (relayData.isNotEmpty() || relayStatus.relayStates.isNotEmpty()) {
+                val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
+                updatedDataMap[currentDeviceId] = currentData.copy(
+                    relayData = relayData,
+                    relayStatus = relayStatus
+                )
+
+                _uiState.value = _uiState.value.copy(
+                    deviceDataMap = updatedDataMap
+                )
+            }
+        } catch (e: Exception) {
+            // Тихо игнорируем ошибки обновления данных реле
+            println("NetPingViewModel.updateRelayDataFromDevice: Ошибка обновления данных реле: ${e.message}")
+        }
+    }
+
     private fun stopAutoUpdate() {
         autoUpdateJob?.cancel()
         autoUpdateJob = null
@@ -435,6 +462,84 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         }
     }
 
+    fun saveRelayData() {
+        viewModelScope.launch {
+            setLoading(true)
+
+            try {
+                val currentData = _uiState.value.currentDeviceData
+                if (currentData != null) {
+                    val result = netPingRepository.saveRelayData(currentData.relayData)
+                    result.fold(
+                        onSuccess = {
+                            _uiState.value = _uiState.value.copy(
+                                errorMessage = "✅ Настройки реле успешно сохранены и применены на устройстве",
+                                isLoading = false
+                            )
+                            // Автоматически обновляем данные реле после сохранения
+                            delay(1500) // Даем время устройству применить изменения
+                            updateRelayDataFromDevice()
+                        },
+                        onFailure = { error ->
+                            _uiState.value = _uiState.value.copy(
+                                errorMessage = "❌ Ошибка сохранения настроек реле: ${error.message}",
+                                isLoading = false
+                            )
+                        }
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        errorMessage = "❌ Нет данных устройства для сохранения",
+                        isLoading = false
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "❌ Неожиданная ошибка: ${e.message ?: "Неизвестная ошибка"}",
+                    isLoading = false
+                )
+            }
+        }
+    }
+
+    fun controlRelay(relayIndex: Int, action: RelayAction) {
+        viewModelScope.launch {
+            try {
+                val currentDevice = _uiState.value.currentDevice
+                if (currentDevice?.isConnected != true) {
+                    _uiState.value = _uiState.value.copy(
+                        errorMessage = "❌ Устройство не подключено"
+                    )
+                    return@launch
+                }
+
+                val result = netPingRepository.controlRelay(relayIndex, action)
+                if (result.isFailure) {
+                    val errorMsg = "❌ Ошибка управления реле ${relayIndex + 1}: ${result.exceptionOrNull()?.message}"
+                    _uiState.value = _uiState.value.copy(
+                        errorMessage = errorMsg
+                    )
+                } else {
+                    val actionName = when (action) {
+                        RelayAction.FORCE_ON -> "кратковременно включено (15 сек)"
+                        RelayAction.FORCE_OFF -> "кратковременно выключено (15 сек)"
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        errorMessage = "✅ Реле ${relayIndex + 1} $actionName"
+                    )
+
+                    // Автоматически обновляем данные реле после команды
+                    delay(2000) // Даем время устройству обработать команду
+                    updateRelayDataFromDevice()
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "❌ Неожиданная ошибка управления реле: ${e.message ?: "Неизвестная ошибка"}"
+                )
+            }
+        }
+    }
+
     fun testSetter(setterIndex: Int, turnOn: Boolean) {
         viewModelScope.launch {
             try {
@@ -503,6 +608,20 @@ import dagger.hilt.android.qualifiers.ApplicationContext
             updatedList[index] = updatedSetter
             val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
             updatedDataMap[currentDeviceId] = currentData.copy(setterData = updatedList)
+
+            _uiState.value = _uiState.value.copy(deviceDataMap = updatedDataMap)
+        }
+    }
+
+    fun updateRelayData(index: Int, updatedRelay: RelayData) {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+        val updatedList = currentData.relayData.toMutableList()
+
+        if (index < updatedList.size) {
+            updatedList[index] = updatedRelay
+            val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
+            updatedDataMap[currentDeviceId] = currentData.copy(relayData = updatedList)
 
             _uiState.value = _uiState.value.copy(deviceDataMap = updatedDataMap)
         }

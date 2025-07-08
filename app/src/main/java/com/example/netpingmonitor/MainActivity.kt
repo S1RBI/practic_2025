@@ -35,6 +35,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
+import androidx.compose.material3.AlertDialog
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import android.content.Context
@@ -282,6 +284,26 @@ fun DeviceTabContent(
                     )
                 }
             }
+            Tab(
+                selected = selectedTab == 2,
+                onClick = { onTabSelected(2) },
+                modifier = Modifier.height(32.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Power,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Реле",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -291,6 +313,7 @@ fun DeviceTabContent(
             when (selectedTab) {
                 0 -> InfoTab(deviceData = deviceData)
                 1 -> LogicTab(deviceData = deviceData, viewModel = viewModel)
+                2 -> RelayTab(deviceData = deviceData, viewModel = viewModel)
             }
         }
     }
@@ -299,7 +322,8 @@ fun DeviceTabContent(
 @Composable
 fun DeviceManagerHeader(
     uiState: NetPingUiState,
-    viewModel: NetPingViewModel
+    viewModel: NetPingViewModel,
+    onDeleteDevice: (SavedDevice) -> Unit = {}
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
@@ -449,7 +473,8 @@ fun DeviceManagerHeader(
             ) {
                 DeviceManagerContent(
                     uiState = uiState,
-                    viewModel = viewModel
+                    viewModel = viewModel,
+                    onDeleteDevice = onDeleteDevice
                 )
             }
 
@@ -471,7 +496,8 @@ fun DeviceManagerHeader(
 @Composable
 fun DeviceManagerContent(
     uiState: NetPingUiState,
-    viewModel: NetPingViewModel
+    viewModel: NetPingViewModel,
+    onDeleteDevice: (SavedDevice) -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -518,7 +544,7 @@ fun DeviceManagerContent(
                         isConnected = device.isConnected,
                         onSelect = { viewModel.selectDevice(device.id) },
                         onConnect = { viewModel.connectToDevice(device.id) },
-                        onDelete = { viewModel.deleteDevice(device.id) }
+                        onDelete = { onDeleteDevice(device) }
                     )
                 }
             }
@@ -600,9 +626,9 @@ fun DeviceCard(
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
-                        imageVector = if (isConnected) Icons.Default.Close else Icons.Default.PlayArrow,
+                        imageVector = if (isConnected) Icons.Default.Refresh else Icons.Default.PlayArrow,
                         contentDescription = if (isConnected) "Отключить" else "Подключить",
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -615,7 +641,7 @@ fun DeviceCard(
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Удалить",
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.error
                     )
                 }
@@ -1226,6 +1252,98 @@ fun SnmpSetterTab(deviceData: NetPingDeviceData, viewModel: NetPingViewModel) {
     }
 }
 
+@Composable
+fun RelayTab(deviceData: NetPingDeviceData, viewModel: NetPingViewModel) {
+    Column {
+        // Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Управление реле",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (deviceData.relayStatus.lastUpdate > 0) {
+                    Text(
+                        text = "Последнее обновление: ${formatLastUpdate(deviceData.relayStatus.lastUpdate)}",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Button(
+                onClick = { viewModel.saveRelayData() },
+                enabled = deviceData.relayData.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Save,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Применить",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+        }
+
+        if (deviceData.relayData.isNotEmpty()) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(deviceData.relayData.size) { index ->
+                    RelayCard(
+                        relay = deviceData.relayData[index],
+                        index = index,
+                        relayStatus = deviceData.relayStatus,
+                        viewModel = viewModel
+                    )
+                }
+            }
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Power,
+                            contentDescription = null,
+                            modifier = Modifier.size(32.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Нет данных реле",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TstatCard(
@@ -1623,6 +1741,161 @@ fun SetterCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RelayCard(
+    relay: RelayData,
+    index: Int,
+    relayStatus: RelayStatusData = RelayStatusData(),
+    viewModel: NetPingViewModel
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Реле ${index + 1}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // Состояние реле
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val isOn = relayStatus.relayStates[index] ?: false
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(12.dp)
+                    ) {}
+                    Text(
+                        text = if (isOn) "Вкл" else "Выкл",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = relay.name,
+                onValueChange = { newName ->
+                    viewModel.updateRelayData(index, relay.copy(name = newName))
+                },
+                label = { Text("Памятка") },
+                placeholder = { Text("Описание назначения реле") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Управление реле
+            var modeExpanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(
+                expanded = modeExpanded,
+                onExpandedChange = { modeExpanded = !modeExpanded }
+            ) {
+                OutlinedTextField(
+                    value = relay.getModeDescription(),
+                    onValueChange = { },
+                    readOnly = true,
+                    label = { Text("Управление реле") },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = modeExpanded)
+                    },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
+                )
+
+                ExposedDropdownMenu(
+                    expanded = modeExpanded,
+                    onDismissRequest = { modeExpanded = false }
+                ) {
+                    RelayData.getModeOptions().forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                viewModel.updateRelayData(index, relay.copy(mode = value))
+                                modeExpanded = false
+                            },
+                            leadingIcon = if (value == relay.mode) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            } else null
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Кратковременное управление
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        viewModel.controlRelay(index, RelayAction.FORCE_ON)
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Power,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        "Кратковр. вкл",
+                        fontSize = 12.sp,
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        viewModel.controlRelay(index, RelayAction.FORCE_OFF)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PowerOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        "Кратковр. выкл",
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
 // ViewModel для управления состоянием приложения
 @HiltViewModel
 class NetPingViewModel @Inject constructor(
@@ -1721,10 +1994,98 @@ class NetPingViewModel @Inject constructor(
 fun NetPingApp(viewModel: NetPingViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var deviceToDelete by remember { mutableStateOf<SavedDevice?>(null) }
+
+    // Диалог подтверждения удаления
+    if (showDeleteDialog && deviceToDelete != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteDialog = false
+                deviceToDelete = null
+            },
+            title = {
+                Text(
+                    text = "Удалить устройство?",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Вы действительно хотите удалить устройство:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = deviceToDelete!!.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = deviceToDelete!!.ipAddress,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Все сохраненные данные и настройки будут потеряны.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteDevice(deviceToDelete!!.id)
+                        showDeleteDialog = false
+                        deviceToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Удалить")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        deviceToDelete = null
+                    }
+                ) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
 
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let { error ->
-            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            // Для успешных операций показываем Toast дольше
+            val duration = if (error.startsWith("✅")) {
+                Toast.LENGTH_LONG
+            } else {
+                Toast.LENGTH_LONG
+            }
+            Toast.makeText(context, error, duration).show()
+
+            // Для успешных сообщений ждем дольше перед очисткой
+            if (error.startsWith("✅")) {
+                delay(3000) // 3 секунды для успешных операций
+            } else {
+                delay(2000) // 2 секунды для ошибок
+            }
             viewModel.clearError()
         }
     }
@@ -1740,7 +2101,11 @@ fun NetPingApp(viewModel: NetPingViewModel = hiltViewModel()) {
             // Modern Header with device management
             DeviceManagerHeader(
                 uiState = uiState,
-                viewModel = viewModel
+                viewModel = viewModel,
+                onDeleteDevice = { device ->
+                    deviceToDelete = device
+                    showDeleteDialog = true
+                }
             )
 
             // Content area с поддержкой нескольких устройств
