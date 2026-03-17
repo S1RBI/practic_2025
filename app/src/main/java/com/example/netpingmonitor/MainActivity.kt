@@ -1,6 +1,7 @@
 //MainActivity
 package com.example.netpingmonitor
 
+import android.R
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -60,6 +61,7 @@ import com.example.netpingmonitor.model.*
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.compose.runtime.collectAsState
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.netpingmonitor.ui.theme.StatusConnected
 import dagger.hilt.android.lifecycle.HiltViewModel
 import com.example.netpingmonitor.viewmodel.NetPingViewModel
 import java.text.SimpleDateFormat
@@ -400,7 +402,7 @@ fun DeviceManagerHeader(
                 Surface(
                     shape = CircleShape,
                     color = if (uiState.isConnected)
-                        MaterialTheme.colorScheme.primary
+                        StatusConnected
                     else
                         MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(12.dp)
@@ -594,7 +596,7 @@ fun DeviceCard(
                     Surface(
                         shape = CircleShape,
                         color = if (isConnected)
-                            MaterialTheme.colorScheme.primary
+                            StatusConnected
                         else
                             MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(8.dp)
