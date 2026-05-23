@@ -66,6 +66,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import com.example.netpingmonitor.viewmodel.NetPingViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.alpha
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -233,17 +237,20 @@ fun DeviceTabContent(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Content tabs
-        TabRow(
+        ScrollableTabRow(
             selectedTabIndex = selectedTab,
             modifier = Modifier.fillMaxWidth(),
             containerColor = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface,
+            edgePadding = 0.dp,
             indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    height = 2.dp,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                if (tabPositions.isNotEmpty() && selectedTab < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                        height = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         ) {
             Tab(
@@ -262,7 +269,9 @@ fun DeviceTabContent(
                     )
                     Text(
                         text = "Информация",
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -282,7 +291,9 @@ fun DeviceTabContent(
                     )
                     Text(
                         text = "Логика",
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -302,7 +313,78 @@ fun DeviceTabContent(
                     )
                     Text(
                         text = "Реле",
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Tab(
+                selected = selectedTab == 3,
+                onClick = { onTabSelected(3) },
+                modifier = Modifier.height(32.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Thermostat,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Термо",
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Tab(
+                selected = selectedTab == 4,
+                onClick = { onTabSelected(4) },
+                modifier = Modifier.height(32.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.WaterDrop,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Влажность",
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Tab(
+                selected = selectedTab == 5,
+                onClick = { onTabSelected(5) },
+                modifier = Modifier.height(32.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ListAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Журнал",
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -316,6 +398,9 @@ fun DeviceTabContent(
                 0 -> InfoTab(deviceData = deviceData)
                 1 -> LogicTab(deviceData = deviceData, viewModel = viewModel)
                 2 -> RelayTab(deviceData = deviceData, viewModel = viewModel)
+                3 -> TermoSensorsTab(deviceData = deviceData, viewModel = viewModel)
+                4 -> RhTab(deviceData = deviceData, viewModel = viewModel)
+                5 -> LogTab(deviceData = deviceData)
             }
         }
     }
@@ -609,6 +694,26 @@ fun DeviceCard(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 )
 
+                Text(
+                    text = "Статус: ${device.connectionStatus}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isConnected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+
+                if (device.connectionStatus.startsWith("Подключение")) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth(0.65f)
+                            .height(4.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+
                 if (device.lastConnected > 0) {
                     Text(
                         text = "Последнее подключение: ${formatLastUpdate(device.lastConnected)}",
@@ -761,7 +866,7 @@ fun AddDeviceForm(
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Text("Добавить")
+                    Text("Сохранить")
                 }
             }
         }
@@ -1480,7 +1585,7 @@ fun TstatCard(
                             viewModel.updateTstatData(index, tstat.copy(setpoint = setpoint))
                         }
                     },
-                    label = { Text("Порог (") },
+                    label = { Text("Порог") },
                     modifier = Modifier.weight(1f),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
@@ -2185,6 +2290,731 @@ fun InfoTab(deviceData: NetPingDeviceData) {
                         )
                     }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun TermoSensorsTab(deviceData: NetPingDeviceData, viewModel: NetPingViewModel) {
+    val termoData = deviceData.termoData
+
+    val scope = rememberCoroutineScope()
+    var notifySensorIndex by remember { mutableStateOf<Int?>(null) }
+    var notifySettings by remember { mutableStateOf<NotifySettings?>(null) }
+    var editNotifySettings by remember { mutableStateOf<NotifySettings?>(null) }
+    var notifyIsLoading by remember { mutableStateOf(false) }
+
+    fun toggleBit(mask: Int, bit: Int, enabled: Boolean): Int {
+        return if (enabled) mask or bit else mask and bit.inv()
+    }
+
+    if (notifySensorIndex != null) {
+        val sensorCh = notifySensorIndex!! // 0-based channel index in веб
+
+        AlertDialog(
+            onDismissRequest = { notifySensorIndex = null },
+            title = {
+                Text("Уведомления для термодатчика ${sensorCh + 1}")
+            },
+            text = {
+                // Перехватываем в val для Smart Cast (без !!)
+                val currentSettings = editNotifySettings
+
+                if (notifyIsLoading || currentSettings == null) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()), // Скролл обязателен!
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // Стандартный набор уведомлений
+                        val standardOptions = listOf(
+                            NotifyOption(1, "Журнал"),
+                            NotifyOption(2, "Syslog"),
+                            NotifyOption(4, "E-mail"),
+                            NotifyOption(8, "SMS"),
+                            NotifyOption(16, "SNMP Trap")
+                        )
+
+                        // Набор для отчета с ОТКЛЮЧЕННЫМИ (серенькими) чекбоксами
+                        val reportOptions = listOf(
+                            NotifyOption(1, "Журнал", isEnabled = false),
+                            NotifyOption(2, "Syslog", isEnabled = false),
+                            NotifyOption(4, "E-mail"),
+                            NotifyOption(8, "SMS"),
+                            NotifyOption(16, "SNMP Trap", isEnabled = false)
+                        )
+
+                        NotifySection(
+                            title = "Температура выше нормы",
+                            mask = currentSettings.highMask,
+                            options = standardOptions,
+                            onMaskChange = { editNotifySettings = currentSettings.copy(highMask = it) }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        NotifySection(
+                            title = "Температура в норме",
+                            mask = currentSettings.normMask,
+                            options = standardOptions,
+                            onMaskChange = { editNotifySettings = currentSettings.copy(normMask = it) }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        NotifySection(
+                            title = "Температура ниже нормы",
+                            mask = currentSettings.lowMask,
+                            options = standardOptions,
+                            onMaskChange = { editNotifySettings = currentSettings.copy(lowMask = it) }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        NotifySection(
+                            title = "Отказ датчика",
+                            mask = currentSettings.failMask,
+                            options = standardOptions,
+                            onMaskChange = { editNotifySettings = currentSettings.copy(failMask = it) }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        NotifySection(
+                            title = "Периодический отчёт",
+                            mask = currentSettings.reportMask,
+                            options = reportOptions, // Передаем список с выключенными элементами
+                            onMaskChange = { editNotifySettings = currentSettings.copy(reportMask = it) }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        editNotifySettings?.let { viewModel.saveTermoNotifySettings(sensorCh, it) }
+                        notifySensorIndex = null
+                    },
+                    enabled = !notifyIsLoading && editNotifySettings != null
+                ) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { notifySensorIndex = null }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Термодатчики",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (deviceData.relayStatus.lastUpdate > 0) {
+                        Text(
+                            text = "Последнее обновление: ${formatLastUpdate(deviceData.relayStatus.lastUpdate)}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = { viewModel.saveTermoSensors() },
+                    enabled = termoData.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Save,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Применить",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+
+        if (termoData.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Нет данных термодатчиков")
+                    }
+                }
+            }
+        } else {
+            itemsIndexed(termoData, key = { _, s -> s.id.toString() }) { index, sensor ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Датчик ${sensor.id}",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            Text(
+                                text = sensor.getStatusText(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = sensor.name,
+                                onValueChange = { newName ->
+                                    viewModel.updateTermoSensor(
+                                        index,
+                                        sensor.copy(name = newName)
+                                    )
+                                },
+                                label = { Text("Имя (до 16)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Текущее значение",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "${sensor.tVal} °C",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Статус",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = sensor.getStatusText(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Нижняя граница нормы",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedTextField(
+                                    value = sensor.bottom.toString(),
+                                    onValueChange = { newValue ->
+                                        newValue.toIntOrNull()?.let { v ->
+                                            viewModel.updateTermoSensor(index, sensor.copy(bottom = v))
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Верхняя граница нормы",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedTextField(
+                                    value = sensor.top.toString(),
+                                    onValueChange = { newValue ->
+                                        newValue.toIntOrNull()?.let { v ->
+                                            viewModel.updateTermoSensor(index, sensor.copy(top = v))
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        OutlinedButton(
+                            onClick = {
+                                val ch = sensor.id - 1
+                                notifyIsLoading = true
+                                notifySettings = null
+                                editNotifySettings = null
+                                notifySensorIndex = ch
+                                scope.launch {
+                                    notifySettings = viewModel.fetchTermoNotifySettings(ch)
+                                    editNotifySettings = notifySettings
+                                    notifyIsLoading = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("Уведомления при смене статуса датчика")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class NotifyOption(val bit: Int, val label: String, val isEnabled: Boolean = true)
+
+@Composable
+fun NotifySection(
+    title: String,
+    mask: Int,
+    options: List<NotifyOption>,
+    onMaskChange: (Int) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        options.chunked(2).forEach { rowOptions ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                rowOptions.forEach { option ->
+                    LabeledCheckbox(
+                        label = option.label,
+                        checked = (mask and option.bit) != 0,
+                        isEnabled = option.isEnabled, // Передаем состояние
+                        onCheckedChange = { checked ->
+                            onMaskChange(toggleBit(mask, option.bit, checked))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rowOptions.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LabeledCheckbox(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    isEnabled: Boolean = true // Новое свойство
+) {
+    // Если чекбокс выключен, делаем текст полупрозрачным (серым)
+    val textAlpha = if (isEnabled) 1f else 0.5f
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(
+                enabled = isEnabled, // Текст нельзя нажать, если чекбокс выключен
+                onClick = { onCheckedChange(!checked) }
+            )
+            .padding(vertical = 4.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = isEnabled // Выключаем сам чекбокс
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.alpha(textAlpha) // Применяем прозрачность к тексту
+        )
+    }
+}
+// Если у вас еще не вынесена эта функция
+private fun toggleBit(mask: Int, bit: Int, enabled: Boolean): Int {
+    return if (enabled) mask or bit else mask and bit.inv()
+}
+
+
+
+@Composable
+fun RhTab(deviceData: NetPingDeviceData, viewModel: NetPingViewModel) {
+    val rh = deviceData.rhStatData
+    val rhHigh = deviceData.rhHigh
+    val rhLow = deviceData.rhLow
+
+    val scope = rememberCoroutineScope()
+    var notifOpen by remember { mutableStateOf(false) }
+    var notifySettings by remember { mutableStateOf<NotifySettings?>(null) }
+    var editNotifySettings by remember { mutableStateOf<NotifySettings?>(null) }
+    var notifyIsLoading by remember { mutableStateOf(false) }
+
+    fun toggleBit(mask: Int, bit: Int, enabled: Boolean): Int {
+        return if (enabled) mask or bit else mask and bit.inv()
+    }
+
+    if (notifOpen) {
+        AlertDialog(
+            onDismissRequest = { notifOpen = false },
+            title = { Text("Уведомления для датчика влажности") },
+            text = {
+                // Перехватываем в локальную переменную, чтобы избавиться от !!
+                val currentSettings = editNotifySettings
+
+                if (notifyIsLoading || currentSettings == null) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()), // Обязательно для длинных списков в Alert!
+                        verticalArrangement = Arrangement.spacedBy(16.dp) // Отступы между секциями
+                    ) {
+                        // Стандартный набор уведомлений
+                        val standardOptions = listOf(
+                            NotifyOption(1, "Журнал"),
+                            NotifyOption(2, "Syslog"),
+                            NotifyOption(4, "E-mail"),
+                            NotifyOption(8, "SMS"),
+                            NotifyOption(16, "SNMP Trap")
+                        )
+
+                        // Набор для отчетов (только почта и смс)
+                        val reportOptions = listOf(
+                            NotifyOption(4, "E-mail"),
+                            NotifyOption(8, "SMS")
+                        )
+
+                        NotifySection(
+                            title = "Влажность выше нормы",
+                            mask = currentSettings.highMask,
+                            options = standardOptions,
+                            onMaskChange = {
+                                editNotifySettings = currentSettings.copy(highMask = it)
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = 0.5f
+                            )
+                        )
+
+                        NotifySection(
+                            title = "Влажность в норме",
+                            mask = currentSettings.normMask,
+                            options = standardOptions,
+                            onMaskChange = {
+                                editNotifySettings = currentSettings.copy(normMask = it)
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = 0.5f
+                            )
+                        )
+
+                        NotifySection(
+                            title = "Влажность ниже нормы",
+                            mask = currentSettings.lowMask,
+                            options = standardOptions,
+                            onMaskChange = {
+                                editNotifySettings = currentSettings.copy(lowMask = it)
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = 0.5f
+                            )
+                        )
+
+                        NotifySection(
+                            title = "Отказ датчика",
+                            mask = currentSettings.failMask,
+                            options = standardOptions,
+                            onMaskChange = {
+                                editNotifySettings = currentSettings.copy(failMask = it)
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = 0.5f
+                            )
+                        )
+
+                        NotifySection(
+                            title = "Периодический отчёт",
+                            mask = currentSettings.reportMask,
+                            options = reportOptions,
+                            onMaskChange = {
+                                editNotifySettings = currentSettings.copy(reportMask = it)
+                            }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        editNotifySettings?.let { viewModel.saveRhNotifySettings(it) }
+                        notifOpen = false
+                    }
+                ) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { notifOpen = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Влажность",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (deviceData.relayStatus.lastUpdate > 0) {
+                        Text(
+                            text = "Последнее обновление: ${formatLastUpdate(deviceData.relayStatus.lastUpdate)}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = { viewModel.saveRhSensorConfig() },
+                    enabled = rh != null && rhHigh != null && rhLow != null,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Save,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Применить",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+
+        if (rh == null) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Нет данных датчика влажности")
+                    }
+                }
+            }
+        } else {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SimpleDataCard(
+                        title = "Датчик относительной влажности",
+                        icon = Icons.Default.WaterDrop,
+                        data = listOf(
+                            "Статус датчика" to rh.getStatusText(),
+                            "Относительная влажность" to "${rh.rhValue} %",
+                            "Температура" to String.format(Locale.getDefault(), "%.1f °C", rh.tValueC),
+                            "Точка росы" to (rh.dewPointC?.let { "$it °C" } ?: "-")
+                        )
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = (rhLow ?: 0).toString(),
+                            onValueChange = { newValue ->
+                                newValue.toIntOrNull()?.let { v -> viewModel.updateRhConfig(rhHigh, v) }
+                            },
+                            label = { Text("Нижняя граница") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = (rhHigh ?: 0).toString(),
+                            onValueChange = { newValue ->
+                                newValue.toIntOrNull()?.let { v -> viewModel.updateRhConfig(v, rhLow) }
+                            },
+                            label = { Text("Верхняя граница") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            notifOpen = true
+                            notifyIsLoading = true
+                            scope.launch {
+                                notifySettings = viewModel.fetchRhNotifySettings()
+                                editNotifySettings = notifySettings
+                                notifyIsLoading = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("Уведомления при смене статуса датчика")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LogTab(deviceData: NetPingDeviceData) {
+    val logText = deviceData.logText
+    val lines = remember(logText) {
+        val all = logText.lines()
+        (if (all.size > 300) all.takeLast(300) else all).reversed()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Card(
+            modifier = Modifier.fillMaxSize(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            if (lines.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Нет данных журнала")
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(lines) { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
     }

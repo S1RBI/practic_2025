@@ -38,12 +38,20 @@ import dagger.hilt.android.qualifiers.ApplicationContext
     }
 
     fun addDevice(ipAddress: String, username: String, password: String) {
+        if (!isValidIpAddress(ipAddress)) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "Некорректный IP-адрес"
+            )
+            return
+        }
+
         val newDevice = SavedDevice(
             id = generateDeviceId(),
             name = "NetPing ($ipAddress)",
             ipAddress = ipAddress,
             username = username,
-            password = password
+            password = password,
+            connectionStatus = "Проверка подключения..."
         )
 
         val updatedDevices = _uiState.value.savedDevices + newDevice
@@ -57,6 +65,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         )
 
         saveDevices()
+        connectToDevice(newDevice.id)
     }
 
     fun deleteDevice(deviceId: String) {
@@ -116,18 +125,43 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         viewModelScope.launch {
             setLoading(true)
 
+            _uiState.value = _uiState.value.copy(
+                savedDevices = _uiState.value.savedDevices.map {
+                    if (it.id == deviceId) it.copy(connectionStatus = "Подключение...")
+                    else it
+                }
+            )
+
             try {
                 val result = netPingRepository.connect(
                     address = device.ipAddress,
                     username = device.username,
-                    password = device.password
+                    password = device.password,
+                    onAttempt = { current, total ->
+                        _uiState.value = _uiState.value.copy(
+                            savedDevices = _uiState.value.savedDevices.map {
+                                if (it.id == deviceId) it.copy(connectionStatus = "Подключение: попытка $current/$total")
+                                else it
+                            }
+                        )
+                    }
                 )
 
                 result.fold(
                     onSuccess = {
                         val updatedDevices = _uiState.value.savedDevices.map {
-                            if (it.id == deviceId) it.copy(isConnected = true, lastConnected = System.currentTimeMillis())
-                            else it.copy(isConnected = false)
+                            if (it.id == deviceId) {
+                                it.copy(
+                                    isConnected = true,
+                                    lastConnected = System.currentTimeMillis(),
+                                    connectionStatus = "Подключено"
+                                )
+                            } else {
+                                it.copy(
+                                    isConnected = false,
+                                    connectionStatus = if (it.connectionStatus == "Подключено") "Не подключено" else it.connectionStatus
+                                )
+                            }
                         }
 
                         _uiState.value = _uiState.value.copy(
@@ -140,9 +174,22 @@ import dagger.hilt.android.qualifiers.ApplicationContext
                         updateDeviceName(deviceId)
                     },
                     onFailure = { error ->
+                        val updatedDevices = _uiState.value.savedDevices.map {
+                            if (it.id == deviceId) {
+                                it.copy(
+                                    isConnected = false,
+                                    connectionStatus = error.message ?: "Ошибка подключения"
+                                )
+                            } else {
+                                it
+                            }
+                        }
+
                         _uiState.value = _uiState.value.copy(
+                            savedDevices = updatedDevices,
                             errorMessage = error.message ?: "Ошибка подключения"
                         )
+                        saveDevices()
                     }
                 )
             } finally {
@@ -189,6 +236,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         stopAutoUpdate()
 
         autoUpdateJob = viewModelScope.launch {
+            var logUpdateTick = 0
+            val LOG_TAB_INDEX = 5
+
             while (true) {
                 delay(AUTO_UPDATE_INTERVAL_MS)
 
@@ -198,6 +248,21 @@ import dagger.hilt.android.qualifiers.ApplicationContext
                         updateLogicStatusInternal()
                     } catch (_: Exception) {
                         // Игнорируем ошибки автообновления
+                    }
+
+                    try {
+                        updateTermoRhDataInternal()
+                    } catch (_: Exception) {
+                        // Игнорируем ошибки автообновления
+                    }
+
+                    logUpdateTick++
+                    if (_uiState.value.selectedTab == LOG_TAB_INDEX && logUpdateTick % 2 == 0) {
+                        try {
+                            updateLogInternal()
+                        } catch (_: Exception) {
+                            // Игнорируем ошибки автообновления
+                        }
                     }
                 }
             }
@@ -216,6 +281,35 @@ import dagger.hilt.android.qualifiers.ApplicationContext
             _uiState.value = _uiState.value.copy(
                 deviceDataMap = updatedDataMap
             )
+        }
+    }
+
+    private suspend fun updateTermoRhDataInternal() {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+
+        val termoData = netPingRepository.getTermoData()
+        val rhStatData = netPingRepository.getRhStatData()
+
+        if (termoData.isNotEmpty() || rhStatData != null) {
+            val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
+            updatedDataMap[currentDeviceId] = currentData.copy(
+                termoData = termoData,
+                rhStatData = rhStatData
+            )
+            _uiState.value = _uiState.value.copy(deviceDataMap = updatedDataMap)
+        }
+    }
+
+    private suspend fun updateLogInternal() {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+
+        val logText = netPingRepository.getLogText()
+        if (logText.isNotBlank()) {
+            val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
+            updatedDataMap[currentDeviceId] = currentData.copy(logText = logText)
+            _uiState.value = _uiState.value.copy(deviceDataMap = updatedDataMap)
         }
     }
 
@@ -627,6 +721,174 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         }
     }
 
+    fun updateTermoSensor(index: Int, updated: TermoSensorData) {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+        val updatedList = currentData.termoData.toMutableList()
+
+        if (index in updatedList.indices) {
+            updatedList[index] = updated
+            val updatedDataMap = _uiState.value.deviceDataMap.toMutableMap()
+            updatedDataMap[currentDeviceId] = currentData.copy(termoData = updatedList)
+            _uiState.value = _uiState.value.copy(deviceDataMap = updatedDataMap)
+        }
+    }
+
+    fun updateRhConfig(rhHigh: Int?, rhLow: Int?) {
+        val currentDeviceId = _uiState.value.currentDeviceId ?: return
+        val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
+
+        _uiState.value = _uiState.value.copy(
+            deviceDataMap = _uiState.value.deviceDataMap.toMutableMap().apply {
+                this[currentDeviceId] = currentData.copy(rhHigh = rhHigh, rhLow = rhLow)
+            }
+        )
+    }
+
+    fun saveTermoSensors() {
+        viewModelScope.launch {
+            setLoading(true)
+            try {
+                val currentDeviceId = _uiState.value.currentDeviceId ?: return@launch
+                val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return@launch
+
+                if (currentData.termoData.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(errorMessage = "Нет данных термодатчиков")
+                    return@launch
+                }
+
+                val updatedTstat = currentData.tstatData.toMutableList()
+
+                // Преобразуем верхнюю/нижнюю границы в setpoint/hyst (косвенное соответствие вебу через tstat_set.cgi).
+                // setpoint = среднее, hyst = половина диапазона.
+                currentData.termoData.forEach { thermo ->
+                    val sensorNo = thermo.id - 1
+                    val idx = updatedTstat.indexOfFirst { it.sensorNo == sensorNo }
+                    if (idx >= 0) {
+                        val top = thermo.top
+                        val bottom = thermo.bottom
+                        val setpoint = ((top + bottom) / 2)
+                        val hyst = kotlin.math.max(1, kotlin.math.abs(top - bottom) / 2)
+                        updatedTstat[idx] = updatedTstat[idx].copy(setpoint = setpoint, hyst = hyst)
+                    }
+                }
+
+                val result = netPingRepository.saveTstatData(updatedTstat)
+                result.fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "✅ Термодатчики: настройки применены",
+                            isLoading = false
+                        )
+                        delay(1500)
+                        refreshData()
+                    },
+                    onFailure = { err ->
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "❌ Ошибка применения термодатчиков: ${err.message}",
+                            isLoading = false
+                        )
+                    }
+                )
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    fun saveRhSensorConfig() {
+        viewModelScope.launch {
+            setLoading(true)
+            try {
+                val currentDeviceId = _uiState.value.currentDeviceId ?: return@launch
+                val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return@launch
+
+                val rhHigh = currentData.rhHigh
+                val rhLow = currentData.rhLow
+                if (rhHigh == null || rhLow == null) {
+                    _uiState.value = _uiState.value.copy(errorMessage = "Введите rh_high и rh_low")
+                    return@launch
+                }
+
+                val updatedTstat = currentData.tstatData.toMutableList()
+                val humiditySensorNo = currentData.termoNChannels // UniPing: первая влажность
+                val idx = updatedTstat.indexOfFirst { it.sensorNo == humiditySensorNo }
+                if (idx < 0) {
+                    _uiState.value = _uiState.value.copy(errorMessage = "Не найден датчик влажности в tstatData")
+                    return@launch
+                }
+
+                val setpoint = ((rhHigh + rhLow) / 2)
+                val hyst = kotlin.math.max(1, kotlin.math.abs(rhHigh - rhLow) / 2)
+                updatedTstat[idx] = updatedTstat[idx].copy(setpoint = setpoint, hyst = hyst)
+
+                val result = netPingRepository.saveTstatData(updatedTstat)
+                result.fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "✅ Влажность: настройки применены",
+                            isLoading = false
+                        )
+                        delay(1500)
+                        refreshData()
+                    },
+                    onFailure = { err ->
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "❌ Ошибка применения влажности: ${err.message}",
+                            isLoading = false
+                        )
+                    }
+                )
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    suspend fun fetchTermoNotifySettings(sensorIndex: Int): NotifySettings {
+        return netPingRepository.getTermoNotifySettings(sensorIndex)
+    }
+
+    suspend fun fetchRhNotifySettings(): NotifySettings {
+        return netPingRepository.getRhNotifySettings()
+    }
+
+    fun saveTermoNotifySettings(sensorIndex: Int, settings: NotifySettings) {
+        viewModelScope.launch {
+            setLoading(true)
+            try {
+                val ok = netPingRepository.saveTermoNotifySettings(sensorIndex, settings)
+                if (ok) {
+                    _uiState.value = _uiState.value.copy(errorMessage = "✅ Уведомления (термодатчик) сохранены", isLoading = false)
+                    delay(1500)
+                    refreshData()
+                } else {
+                    _uiState.value = _uiState.value.copy(errorMessage = "❌ Не удалось сохранить уведомления термодатчика", isLoading = false)
+                }
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    fun saveRhNotifySettings(settings: NotifySettings) {
+        viewModelScope.launch {
+            setLoading(true)
+            try {
+                val ok = netPingRepository.saveRhNotifySettings(settings)
+                if (ok) {
+                    _uiState.value = _uiState.value.copy(errorMessage = "✅ Уведомления (влажность) сохранены", isLoading = false)
+                    delay(1500)
+                    refreshData()
+                } else {
+                    _uiState.value = _uiState.value.copy(errorMessage = "❌ Не удалось сохранить уведомления влажности", isLoading = false)
+                }
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
+        }
+    }
+
     fun moveLogicRule(fromIndex: Int, toIndex: Int) {
         val currentDeviceId = _uiState.value.currentDeviceId ?: return
         val currentData = _uiState.value.deviceDataMap[currentDeviceId] ?: return
@@ -649,6 +911,31 @@ import dagger.hilt.android.qualifiers.ApplicationContext
         return "device_${System.currentTimeMillis()}"
     }
 
+    private fun isValidIpAddress(ip: String): Boolean {
+        val input = ip.trim()
+        if (input.isBlank()) return false
+
+        val hostPart: String
+        val portPart: String?
+
+        val colonIndex = input.lastIndexOf(':')
+        if (colonIndex >= 0) {
+            hostPart = input.substring(0, colonIndex)
+            portPart = input.substring(colonIndex + 1)
+            val port = portPart.toIntOrNull() ?: return false
+            if (port !in 1..65535) return false
+        } else {
+            hostPart = input
+            portPart = null
+        }
+
+        val parts = hostPart.split(".")
+        if (parts.size != 4) return false
+        return parts.all { part ->
+            part.toIntOrNull()?.let { it in 0..255 } == true
+        }
+    }
+
     private fun loadSavedDevices() {
         try {
             val devicesJson = sharedPreferences.getString(KEY_SAVED_DEVICES, null)
@@ -666,7 +953,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
             }
 
             val devicesWithResetConnection = savedDevices.map { device ->
-                device.copy(isConnected = false)
+                device.copy(
+                    isConnected = false,
+                    connectionStatus = if (device.connectionStatus == "Подключено") "Не подключено" else device.connectionStatus
+                )
             }
 
             _uiState.value = _uiState.value.copy(

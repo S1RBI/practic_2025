@@ -11,6 +11,11 @@ import com.example.netpingmonitor.util.NetPingParser
 import com.example.netpingmonitor.model.*
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
 
 @Singleton class NetPingRepository @Inject constructor( private val okHttpClient: OkHttpClient ) { companion object {
     private const val DEVNAME_ENDPOINT = "/devname_menu.cgi"
@@ -29,6 +34,17 @@ import javax.inject.Singleton
     private const val RELAY_ENDPOINT = "/relay_get.cgi"
     private const val RELAY_SET_ENDPOINT = "/relay_set.cgi"
     private const val RELAY_RESET_ENDPOINT = "/relay_reset.cgi"
+
+    // Monitoring tabs endpoints
+    private const val TERMO_DATA_ENDPOINT = "/termo_data.cgi"
+    private const val RH_STAT_GET_ENDPOINT = "/rh_stat_get.cgi"
+    private const val LOG_ENDPOINT = "/log.cgi"
+    private const val RELHUM_GET_ENDPOINT = "/relhum_get.cgi"
+
+    private const val NOTIFY_GET_ENDPOINT = "/notify_get.cgi"
+    private const val NOTIFY_SET_ENDPOINT = "/notify_set.cgi"
+
+    private const val MAX_LOG_CHARS = 50_000
 }
 
     private var currentDeviceUrl: String? = null
@@ -36,18 +52,45 @@ import javax.inject.Singleton
     private var currentTstatData: List<TstatData> = emptyList()
     private var cachedLogicRunning: Boolean = false
 
-    suspend fun connect(address: String, username: String, password: String): Result<Boolean> =
+    private sealed class ConnectionProbeResult {
+        data object Success : ConnectionProbeResult()
+        data class HttpError(val code: Int) : ConnectionProbeResult()
+        data object NetworkFailure : ConnectionProbeResult()
+    }
+
+    suspend fun connect(
+        address: String,
+        username: String,
+        password: String,
+        onAttempt: ((current: Int, total: Int) -> Unit)? = null
+    ): Result<Boolean> =
         withContext(Dispatchers.IO) {
             try {
                 currentDeviceUrl = "http://$address"
                 currentCredentials = Credentials.basic(username, password)
 
-                val isConnected = testConnection()
-                if (isConnected) {
-                    Result.success(true)
-                } else {
-                    Result.failure(Exception("Устройство не отвечает"))
+                val maxAttempts = 3
+                repeat(maxAttempts) { attempt ->
+                    onAttempt?.invoke(attempt + 1, maxAttempts)
+                    when (val probe = testConnectionProbe()) {
+                        is ConnectionProbeResult.Success -> return@withContext Result.success(true)
+                        is ConnectionProbeResult.HttpError -> {
+                            return@withContext when (probe.code) {
+                                401 -> Result.failure(Exception("Ошибка аутентификации (HTTP 401)"))
+                                else -> Result.failure(Exception("Ошибка подключения (HTTP ${probe.code})"))
+                            }
+                        }
+                        is ConnectionProbeResult.NetworkFailure -> {
+                            if (attempt < maxAttempts - 1) {
+                                delay(5_000)
+                            } else {
+                                return@withContext Result.failure(Exception("Нет соединения"))
+                            }
+                        }
+                    }
                 }
+
+                Result.failure(Exception("Нет соединения"))
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -65,6 +108,11 @@ import javax.inject.Singleton
             val termoNChannels = tstatDataTriple.second
             val rhNChannels = tstatDataTriple.third
             currentTstatData = tstatData
+
+            val termoData = fetchTermoData()
+            val rhStatData = fetchRhStatData()
+            val (rhHigh, rhLow) = fetchRhConfigData()
+            val logText = fetchLogText()
 
             val uptimeFromSetup = fetchUptimeFromSetup()
             val completeDeviceInfo = deviceInfoData.copy(
@@ -91,6 +139,11 @@ import javax.inject.Singleton
                 logicStatus = completeLogicStatus,
                 termoNChannels = termoNChannels,
                 rhNChannels = rhNChannels,
+                termoData = termoData,
+                rhStatData = rhStatData,
+                    rhHigh = rhHigh,
+                    rhLow = rhLow,
+                logText = logText,
                 relayData = relayData,
                 relayStatus = relayStatus
             )
@@ -106,6 +159,21 @@ import javax.inject.Singleton
         } catch (@Suppress("UNUSED_PARAMETER") e: Exception) {
             LogicStatusData(isLogicRunning = cachedLogicRunning)
         }
+    }
+
+    suspend fun getTermoData(): List<TermoSensorData> = withContext(Dispatchers.IO) {
+        requireConnection()
+        fetchTermoData()
+    }
+
+    suspend fun getRhStatData(): RhStatData? = withContext(Dispatchers.IO) {
+        requireConnection()
+        fetchRhStatData()
+    }
+
+    suspend fun getLogText(): String = withContext(Dispatchers.IO) {
+        requireConnection()
+        fetchLogText()
     }
 
     suspend fun saveLogicRules(logicRules: List<LogicRule>): Result<Boolean> =
@@ -777,13 +845,27 @@ import javax.inject.Singleton
             }
         }
 
-    private fun testConnection(): Boolean {
+    private fun testConnectionProbe(): ConnectionProbeResult {
         return try {
             val request = createGetRequest(DEVNAME_ENDPOINT)
-            val response = okHttpClient.newCall(request).execute()
-            response.isSuccessful
-        } catch (@Suppress("UNUSED_PARAMETER") e: Exception) {
-            false
+            val call = okHttpClient.newCall(request)
+            call.timeout().timeout(10, TimeUnit.SECONDS)
+            val response = call.execute()
+
+            when {
+                response.isSuccessful -> ConnectionProbeResult.Success
+                else -> ConnectionProbeResult.HttpError(response.code)
+            }
+        } catch (_: SocketTimeoutException) {
+            ConnectionProbeResult.NetworkFailure
+        } catch (_: ConnectException) {
+            ConnectionProbeResult.NetworkFailure
+        } catch (_: UnknownHostException) {
+            ConnectionProbeResult.NetworkFailure
+        } catch (_: IOException) {
+            ConnectionProbeResult.NetworkFailure
+        } catch (_: Exception) {
+            ConnectionProbeResult.NetworkFailure
         }
     }
 
@@ -847,6 +929,150 @@ import javax.inject.Singleton
         } catch (e: Exception) {
             Triple(emptyList(), 8, 0)
         }
+    }
+
+    private fun fetchTermoData(): List<TermoSensorData> {
+        return try {
+            val request = createGetRequest(TERMO_DATA_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) return emptyList()
+
+            val responseBody = response.body?.string() ?: ""
+            NetPingParser.parseTermoDataResponse(responseBody)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun fetchRhStatData(): RhStatData? {
+        return try {
+            val request = createGetRequest(RH_STAT_GET_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) return null
+
+            val responseBody = response.body?.string() ?: ""
+            NetPingParser.parseRhStatResponse(responseBody)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun fetchRhConfigData(): Pair<Int?, Int?> {
+        return try {
+            val request = createGetRequest(RELHUM_GET_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) return Pair(null, null)
+
+            val responseBody = response.body?.string() ?: ""
+            NetPingParser.parseRelhumGetResponse(responseBody)
+        } catch (_: Exception) {
+            Pair(null, null)
+        }
+    }
+
+    suspend fun getTermoNotifySettings(sensorIndex: Int): NotifySettings = withContext(Dispatchers.IO) {
+        try {
+            val nfid = "01" + toHex2(sensorIndex)
+            val url = "${NOTIFY_GET_ENDPOINT}?nfid=$nfid"
+            val request = createGetRequest(url)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                return@withContext NotifySettings(0, 0, 0, 0, 0)
+            }
+
+            val responseBody = response.body?.string() ?: ""
+            NetPingParser.parseNotifyGetResponse(responseBody) ?: NotifySettings(0, 0, 0, 0, 0)
+        } catch (_: Exception) {
+            NotifySettings(0, 0, 0, 0, 0)
+        }
+    }
+
+    suspend fun saveTermoNotifySettings(sensorIndex: Int, settings: NotifySettings): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val payload =
+                    "data=01${toHex2(sensorIndex)}" +
+                        toHex2(settings.highMask) +
+                        toHex2(settings.normMask) +
+                        toHex2(settings.lowMask) +
+                        toHex2(settings.failMask) +
+                        toHex2(settings.reportMask) +
+                        "0000" + "00000000"
+
+                val body = payload.toRequestBody("application/x-www-form-urlencoded".toMediaType())
+                val request = createPostRequest(NOTIFY_SET_ENDPOINT, body)
+                val response = okHttpClient.newCall(request).execute()
+                response.isSuccessful
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+    suspend fun getRhNotifySettings(): NotifySettings = withContext(Dispatchers.IO) {
+        try {
+            val url = "${NOTIFY_GET_ENDPOINT}?nfid=0300"
+            val request = createGetRequest(url)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                return@withContext NotifySettings(0, 0, 0, 0, 0)
+            }
+
+            val responseBody = response.body?.string() ?: ""
+            NetPingParser.parseNotifyGetResponse(responseBody) ?: NotifySettings(0, 0, 0, 0, 0)
+        } catch (_: Exception) {
+            NotifySettings(0, 0, 0, 0, 0)
+        }
+    }
+
+    suspend fun saveRhNotifySettings(settings: NotifySettings): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val payload =
+                "data=0300" +
+                    toHex2(settings.highMask) +
+                    toHex2(settings.normMask) +
+                    toHex2(settings.lowMask) +
+                    toHex2(settings.failMask) +
+                    toHex2(settings.reportMask)
+
+            val body = payload.toRequestBody("application/x-www-form-urlencoded".toMediaType())
+            val request = createPostRequest(NOTIFY_SET_ENDPOINT, body)
+            val response = okHttpClient.newCall(request).execute()
+            response.isSuccessful
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun toHex2(value: Int): String {
+        val v = value and 0xFF
+        return String.format("%02X", v)
+    }
+
+    private fun fetchLogText(): String {
+        return try {
+            val request = createGetRequest(LOG_ENDPOINT)
+            val response = okHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) return ""
+
+            val responseBody = response.body?.string() ?: ""
+            limitLogText(responseBody)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun limitLogText(text: String): String {
+        val trimmed = text.trimEnd()
+        if (trimmed.length <= MAX_LOG_CHARS) return trimmed
+
+        // Оставляем хвост, чтобы UI не раздувался слишком сильно
+        return "...\n${trimmed.takeLast(MAX_LOG_CHARS)}"
     }
 
     private fun fetchPingerData(): List<PingerData> {

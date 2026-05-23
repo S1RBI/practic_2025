@@ -1,0 +1,1 @@
+status_data={rh_value:0, t_value:0, t_value_100:0, rh_status_h:0}

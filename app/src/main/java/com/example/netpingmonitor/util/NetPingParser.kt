@@ -150,6 +150,118 @@ internal object NetPingParser {
     }
 
     /**
+     * Парсит данные термодатчиков из `termo_data.cgi`.
+     *
+     * Ответ представляет собой JS-массив объектов вида:
+     * [{name:"...",bottom:5,top:35,...}, ...]
+     */
+    fun parseTermoDataResponse(responseBody: String): List<TermoSensorData> {
+        return try {
+            val sensorObjects = JS_OBJECT_REGEX.findAll(responseBody).toList()
+            if (sensorObjects.isEmpty()) return emptyList()
+
+            sensorObjects.mapIndexed { index, match ->
+                val objectString = match.groupValues[1]
+                val objectData = parseJavaScriptObject(objectString)
+
+                TermoSensorData(
+                    id = index + 1,
+                    name = objectData["name"] ?: "",
+                    bottom = objectData["bottom"]?.toIntOrNull() ?: 0,
+                    top = objectData["top"]?.toIntOrNull() ?: 0,
+                    doubleHyst = objectData["double_hyst"]?.toIntOrNull() ?: 0,
+                    tOfHumidity = objectData["t_of_humidity"]?.toIntOrNull() ?: 0,
+                    tStatus = objectData["t_status"]?.toIntOrNull() ?: 0,
+                    tVal = objectData["tval"]?.toIntOrNull() ?: 0
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Парсит текущие показания датчика влажности из `rh_stat_get.cgi`.
+     *
+     * В вебе это выглядит как:
+     * status_data={rh_value:0, t_value:0, t_value_100:0, rh_status_h:0}
+     */
+    fun parseRhStatResponse(responseBody: String): RhStatData? {
+        return try {
+            val dataMatch = Regex("status_data\\s*=\\s*\\{([^}]+)\\}").find(responseBody)
+            if (dataMatch == null) return null
+
+            val dataString = dataMatch.groupValues[1]
+            val objectData = parseJavaScriptObject(dataString)
+
+            val rhValue = objectData["rh_value"]?.toIntOrNull() ?: 0
+            val rhStatusH = objectData["rh_status_h"]?.toIntOrNull() ?: 0
+
+            val tValue100 = objectData["t_value_100"]?.toIntOrNull()
+            val tValueC = when {
+                tValue100 != null -> tValue100.toDouble() / 100.0
+                objectData["t_value"] != null -> objectData["t_value"]!!.toDouble()
+                else -> 0.0
+            }
+
+            val dewPointC = computeDewPointC(tValueC, rhValue)
+
+            RhStatData(
+                rhValue = rhValue,
+                tValueC = tValueC,
+                rhStatusH = rhStatusH,
+                dewPointC = dewPointC
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Парсит настройки влажности из `relhum_get.cgi`:
+     * ожидаются как минимум `rh_high` и `rh_low`.
+     */
+    fun parseRelhumGetResponse(responseBody: String): Pair<Int?, Int?> {
+        fun extractIntKey(key: String): Int? {
+            val regex = Regex("$key\\s*[:=]\\s*([-]?[0-9]+)")
+            val match = regex.find(responseBody)
+            return match?.groupValues?.get(1)?.toIntOrNull()
+        }
+
+        return try {
+            val rhHigh = extractIntKey("rh_high")
+            val rhLow = extractIntKey("rh_low")
+            Pair(rhHigh, rhLow)
+        } catch (_: Exception) {
+            Pair(null, null)
+        }
+    }
+
+    /**
+     * Парсит ответ `notify_get.cgi` (термодатчик/влажность) и достает masks:
+     * high, norm, low, fail, report.
+     */
+    fun parseNotifyGetResponse(responseBody: String): NotifySettings? {
+        return try {
+            val high = Regex("high\\s*[:=]\\s*(\\d+)").find(responseBody)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+            val norm = Regex("norm\\s*[:=]\\s*(\\d+)").find(responseBody)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+            val low = Regex("low\\s*[:=]\\s*(\\d+)").find(responseBody)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+            val fail = Regex("fail\\s*[:=]\\s*(\\d+)").find(responseBody)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+            val report = Regex("report\\s*[:=]\\s*(\\d+)").find(responseBody)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+            NotifySettings(
+                highMask = high,
+                normMask = norm,
+                lowMask = low,
+                failMask = fail,
+                reportMask = report
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Парсит SETTER данные
      */
     fun parseSetterResponse(responseBody: String): List<SetterData> {
@@ -552,5 +664,28 @@ internal object NetPingParser {
             if (minutes > 0) append("${minutes}м ")
             append("${remainingSeconds}с")
         }.trim()
+    }
+
+    /**
+     * Точка росы по формуле из веб-страницы.
+     *
+     * В вебе используется dewpoint(t, rH/100.0), где rH задаётся в процентах.
+     */
+    private fun computeDewPointC(tC: Double, rhPercent: Int): Int? {
+        // В вебе: if dp NaN или dp < -100 или dp > 100 => '-'
+        if (rhPercent <= 0) return null
+
+        val rhFraction = rhPercent.toDouble() / 100.0
+        if (rhFraction <= 0.0) return null
+
+        val a = 17.27
+        val b = 237.7
+        val alf = a * tC / (b + tC) + kotlin.math.ln(rhFraction)
+        val dp = b * alf / (a - alf)
+
+        if (dp.isNaN() || dp <= -100.0 || dp >= 100.0) return null
+
+        // Используем round() вместо roundToInt(), чтобы избежать проблем с версиями Kotlin/stdlib.
+        return kotlin.math.round(dp).toInt()
     }
 }

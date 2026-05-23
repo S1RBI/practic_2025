@@ -9,7 +9,8 @@ data class SavedDevice(
     val username: String,
     val password: String,
     val lastConnected: Long = 0L,
-    val isConnected: Boolean = false
+    val isConnected: Boolean = false,
+    val connectionStatus: String = "Не подключено"
 )
 
 // UI состояние приложения
@@ -56,8 +57,69 @@ data class NetPingDeviceData(
     val logicStatus: LogicStatusData = LogicStatusData(),
     val termoNChannels: Int = 8, // Количество температурных каналов из termo_n_ch
     val rhNChannels: Int = 0, // Количество датчиков влажности из rh_n_ch
+    // Данные из termo_data.cgi (термодатчики + границы норм)
+    val termoData: List<TermoSensorData> = emptyList(),
+    // Данные текущих показаний из rh_stat_get.cgi
+    val rhStatData: RhStatData? = null,
+    // Настройки диапазона нормальной влажности из relhum_get.cgi
+    val rhHigh: Int? = null,
+    val rhLow: Int? = null,
+    // Текст журнала из log.cgi
+    val logText: String = "",
     val relayData: List<RelayData> = emptyList(), // Данные реле
     val relayStatus: RelayStatusData = RelayStatusData() // Статус реле
+)
+
+/**
+ * Строка/настройки одного термодатчика из `termo_data.cgi`.
+ */
+data class TermoSensorData(
+    val id: Int,
+    val name: String,
+    val bottom: Int,
+    val top: Int,
+    val doubleHyst: Int,
+    val tOfHumidity: Int,
+    val tStatus: Int,
+    val tVal: Int
+) {
+    fun getStatusText(): String = when (tStatus) {
+        0 -> "отказ"
+        1 -> "ниже нормы"
+        2 -> "в норме"
+        3 -> "выше нормы"
+        else -> "неизвестно ($tStatus)"
+    }
+}
+
+/**
+ * Текущие показания датчика относительной влажности из `rh_stat_get.cgi`.
+ */
+data class RhStatData(
+    val rhValue: Int,
+    val tValueC: Double,
+    val rhStatusH: Int,
+    val dewPointC: Int? // точка росы (как в вебе: Math.round) или null если недоступна
+) {
+    fun getStatusText(): String = when (rhStatusH) {
+        0 -> "датчик не работает"
+        1 -> "ниже нормы"
+        2 -> "в пределах нормы"
+        3 -> "выше нормы"
+        else -> "неизвестно ($rhStatusH)"
+    }
+}
+
+/**
+ * Маски уведомлений при смене статуса датчика (в формате notify_get/set.cgi).
+ * Биты: log=1, syslog=2, email=4, sms=8, trap=16.
+ */
+data class NotifySettings(
+    val highMask: Int,
+    val normMask: Int,
+    val lowMask: Int,
+    val failMask: Int,
+    val reportMask: Int
 )
 
 // Информация об устройстве
